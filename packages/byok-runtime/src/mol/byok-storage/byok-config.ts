@@ -1,6 +1,7 @@
 import { AUGMENT_BYOK } from "../../constants";
 import { normalizeEndpoint, normalizeString } from "../../atom/common/http";
 import { asRecord } from "../../atom/common/object";
+import { assertVscodeContextStorage } from "../../atom/common/vscode-storage";
 import type { ByokConfigV2, ByokExportV2, ByokProvider, ByokProviderSecrets, ByokResolvedConfigV2, ByokRoutingRule } from "../../types";
 
 function normalizeProvider(v: unknown): ByokProvider | null {
@@ -76,10 +77,34 @@ export function resolveSecretOrThrow(raw: string, env: NodeJS.ProcessEnv): strin
 }
 
 function assertContextStorage(context: any): void {
-  const okGlobalState = context?.globalState && typeof context.globalState.get === "function" && typeof context.globalState.update === "function";
-  const okSecrets =
-    context?.secrets && typeof context.secrets.get === "function" && typeof context.secrets.store === "function" && typeof context.secrets.delete === "function";
-  if (!okGlobalState || !okSecrets) throw new Error("BYOK 安全存储不可用（缺少 globalState / secrets）");
+  assertVscodeContextStorage(context, "BYOK 安全存储");
+}
+
+export type ByokSecretStatus = {
+  proxy: { token: "missing" | "env" | "set" };
+  providers: Record<string, { apiKey: "missing" | "env" | "set" }>;
+};
+
+export async function getByokSecretStatus({ context, config }: { context: any; config?: ByokConfigV2 }): Promise<ByokSecretStatus> {
+  assertContextStorage(context);
+  const cfg = config || (await loadByokConfigRaw({ context }));
+  const proxyTokenRaw = normalizeString(await context.secrets.get(proxySecretKey("token")));
+  const tokenStatus = !proxyTokenRaw ? "missing" : parseEnvPlaceholder(proxyTokenRaw) ? "env" : "set";
+  const providers: ByokSecretStatus["providers"] = {};
+  for (const p of cfg.providers) {
+    const pid = normalizeString(p.id);
+    if (!pid) continue;
+    const apiKeyRaw = normalizeString(await context.secrets.get(secretKey(pid, "apiKey")));
+    const tokenRaw = normalizeString(await context.secrets.get(secretKey(pid, "token")));
+    const raw = apiKeyRaw || tokenRaw;
+    providers[pid] = { apiKey: !raw ? "missing" : parseEnvPlaceholder(raw) ? "env" : "set" };
+  }
+  return { proxy: { token: tokenStatus }, providers };
+}
+
+export async function getByokProxyTokenRaw({ context }: { context: any }): Promise<string> {
+  assertContextStorage(context);
+  return normalizeString(await context.secrets.get(proxySecretKey("token")));
 }
 
 export async function loadByokConfigRaw({ context }: { context: any }): Promise<ByokConfigV2> {

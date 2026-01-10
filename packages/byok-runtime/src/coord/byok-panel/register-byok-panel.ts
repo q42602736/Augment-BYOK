@@ -1,12 +1,12 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { exportByokConfig, importByokConfig, loadByokConfigRaw, loadByokConfigResolved, parseEnvPlaceholder, resolveSecretOrThrow, saveByokConfig } from "../../mol/byok-storage/byok-config";
-import { loadProviderModelsCacheRaw, saveCachedProviderModels } from "../../mol/byok-routing/provider-models-cache";
+import { exportByokConfig, getByokProxyTokenRaw, getByokSecretStatus, importByokConfig, loadByokConfigRaw, loadByokConfigResolved, resolveSecretOrThrow, saveByokConfig } from "../../mol/byok-storage/byok-config";
+import { loadProviderModelsCacheRaw, saveCachedProviderModels } from "../../mol/byok-storage/byok-cache";
 import { AUGMENT_BYOK } from "../../constants";
 import { anthropicListModels } from "../../atom/byok-providers/anthropic-native";
 import { openAiListModels } from "../../atom/byok-providers/openai-compatible";
-import { assertHttpBaseUrl, buildBearerAuthHeader, joinBaseUrl, normalizeEndpoint, normalizeRawToken, normalizeString } from "../../atom/common/http";
+import { assertHttpBaseUrl, buildBearerAuthHeader, ensureTrailingSlash, joinBaseUrl, normalizeEndpoint, normalizeRawToken, normalizeString } from "../../atom/common/http";
 
 const COMMAND_ID = "vscode-augment.byok.settings";
 const VIEW_TYPE = "augmentByokPanel";
@@ -171,21 +171,15 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
             if (method === "load") {
               const config = await loadByokConfigRaw({ context });
               const modelsCache = await loadProviderModelsCacheRaw({ context });
-              const proxyTokenRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.proxy.token`));
-              const tokenStatus = !proxyTokenRaw ? "missing" : parseEnvPlaceholder(proxyTokenRaw) ? "env" : "set";
-              const providersStatus: Record<string, { apiKey: string }> = {};
+              const secretStatus = await getByokSecretStatus({ context, config });
               const providersModelsCache: Record<string, { updatedAtMs: number; models: string[] }> = {};
               for (const p of config.providers) {
-                const apiKeyRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.provider.${p.id}.apiKey`));
-                const tokenRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.provider.${p.id}.token`));
-                const raw = apiKeyRaw || tokenRaw;
-                providersStatus[p.id] = { apiKey: !raw ? "missing" : parseEnvPlaceholder(raw) ? "env" : "set" };
                 const cached = modelsCache.providers[p.id];
-                if (cached && normalizeString(cached.baseUrl).replace(/\/+$/, "") === normalizeString(p.baseUrl).replace(/\/+$/, "")) {
+                if (cached && ensureTrailingSlash(normalizeString(cached.baseUrl)) === ensureTrailingSlash(normalizeString(p.baseUrl))) {
                   providersModelsCache[p.id] = { updatedAtMs: cached.updatedAtMs, models: cached.models };
                 }
               }
-              await post(requestId, { ok: true, result: { config, secretStatus: { proxy: { token: tokenStatus }, providers: providersStatus }, modelsCache: providersModelsCache } });
+              await post(requestId, { ok: true, result: { config, secretStatus, modelsCache: providersModelsCache } });
               return;
             }
 
@@ -209,7 +203,7 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
                   if (!pdefaultModel) throw new Error(`Provider(${pid}) 缺少 defaultModel`);
                 }
                 assertHttpBaseUrl(cfg && typeof cfg === "object" ? (cfg as any)?.proxy?.baseUrl : "");
-                const storedRaw = normalizeString(await context.secrets.get(`${AUGMENT_BYOK.byokSecretPrefix}.proxy.token`));
+                const storedRaw = await getByokProxyTokenRaw({ context });
                 const nextTokenRaw = proxyToken ? proxyToken : clearProxyToken ? "" : storedRaw;
                 const nextToken = nextTokenRaw ? resolveSecretOrThrow(nextTokenRaw, process.env) : "";
                 if (!normalizeRawToken(nextToken)) throw new Error("Token 未配置");

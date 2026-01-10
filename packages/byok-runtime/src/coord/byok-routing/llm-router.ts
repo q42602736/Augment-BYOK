@@ -1,14 +1,15 @@
 import { loadByokConfigRaw, loadByokConfigResolved } from "../../mol/byok-storage/byok-config";
-import { getCachedProviderModels, saveCachedProviderModels } from "../../mol/byok-routing/provider-models-cache";
+import { getCachedProviderModels, getCachedUpstreamGetModels, saveCachedUpstreamGetModels } from "../../mol/byok-storage/byok-cache";
 import { AUGMENT_BYOK } from "../../constants";
 import type { ByokResolvedConfigV2, ByokResolvedProvider, ByokRoutingRule } from "../../types";
 import { buildAbortSignal, buildBearerAuthHeader, joinBaseUrl, normalizeEndpoint, normalizeString } from "../../atom/common/http";
 import { asRecord } from "../../atom/common/object";
-import { anthropicComplete, anthropicCompleteWithTools, anthropicListModels, anthropicStream, type AnthropicTool } from "../../atom/byok-providers/anthropic-native";
-import { openAiChatComplete, openAiChatCompleteWithTools, openAiChatStream, openAiListModels, type OpenAiTool } from "../../atom/byok-providers/openai-compatible";
+import { anthropicComplete, anthropicCompleteWithTools, anthropicStream, type AnthropicTool } from "../../atom/byok-providers/anthropic-native";
+import { openAiChatComplete, openAiChatCompleteWithTools, openAiChatStream, type OpenAiTool } from "../../atom/byok-providers/openai-compatible";
 
 const BYOK_REQUEST_TIMEOUT_MS = 120_000;
 const BYOK_MODELS_TIMEOUT_MS = 12_000;
+const UPSTREAM_GET_MODELS_CACHE_MAX_AGE_MS = 10 * 60_000;
 
 function tryParseJsonObject(v: unknown): Record<string, any> | null {
   if (!v) return null;
@@ -77,16 +78,6 @@ async function fetchAugmentGetModels({
   const json = text ? JSON.parse(text) : null;
   if (!json || typeof json !== "object") throw new Error("get-models 响应不是 JSON 对象");
   return json;
-}
-
-async function listProviderModels(provider: ByokResolvedProvider, timeoutMs: number): Promise<string[]> {
-  const baseUrl = normalizeString(provider.baseUrl);
-  if (!baseUrl) throw new Error(`Provider(${provider.id}) 缺少 baseUrl`);
-  const apiKey = normalizeString(provider.secrets.apiKey || provider.secrets.token || "");
-  if (!apiKey) throw new Error(`Provider(${provider.id}) 缺少 apiKey/token`);
-  if (provider.type === "openai_compatible") return await openAiListModels({ baseUrl, apiKey, timeoutMs });
-  if (provider.type === "anthropic_native") return await anthropicListModels({ baseUrl, apiKey, timeoutMs });
-  throw new Error(`未知 Provider type: ${String((provider as any).type)}`);
 }
 
 function isChatEndpoint(endpoint: string): boolean {
@@ -539,13 +530,29 @@ export async function maybeHandleCallApi({
     const baseUrl = normalizeString(cfg.proxy.baseUrl) || normalizeString(upstreamBaseUrl);
     const token = normalizeString(cfg.proxy.token || "") || normalizeString(upstreamApiToken);
     let upstream: any = null;
+    let cached: Awaited<ReturnType<typeof getCachedUpstreamGetModels>> | null = null;
+    if (baseUrl) {
+      try {
+        cached = await getCachedUpstreamGetModels({ context: ctx, baseUrl, maxAgeMs: UPSTREAM_GET_MODELS_CACHE_MAX_AGE_MS });
+      } catch (err) {
+        console.warn(`[BYOK] get-models cache 读取失败：${err instanceof Error ? err.message : String(err)}`);
+        cached = null;
+      }
+    }
     if (baseUrl && token) {
       try {
         upstream = await fetchAugmentGetModels({ baseUrl, token, timeoutMs: BYOK_MODELS_TIMEOUT_MS, abortSignal });
+        try {
+          await saveCachedUpstreamGetModels({ context: ctx, baseUrl, value: upstream });
+        } catch (err) {
+          console.warn(`[BYOK] get-models cache 写入失败：${err instanceof Error ? err.message : String(err)}`);
+        }
       } catch (err) {
         console.warn(`[BYOK] get-models 透传失败：${err instanceof Error ? err.message : String(err)}`);
-        upstream = null;
+        upstream = cached?.value || null;
       }
+    } else {
+      upstream = cached?.value || null;
     }
 
     const upstreamFlagsRaw = tryParseJsonObject((upstream as any)?.feature_flags) || {};
@@ -559,8 +566,7 @@ export async function maybeHandleCallApi({
       let modelsRaw: string[] = [];
       try {
         const cached = await getCachedProviderModels({ context: ctx, providerId: p.id, baseUrl: p.baseUrl });
-        modelsRaw = cached?.models?.length ? cached.models : await listProviderModels(p, BYOK_MODELS_TIMEOUT_MS);
-        if (modelsRaw.length && !cached?.models?.length) await saveCachedProviderModels({ context: ctx, providerId: p.id, baseUrl: p.baseUrl, models: modelsRaw });
+        modelsRaw = cached?.models?.length ? cached.models : [];
       } catch (err) {
         console.warn(`[BYOK] Provider(${p.id}) models 获取失败：${err instanceof Error ? err.message : String(err)}`);
       }
@@ -612,7 +618,25 @@ export async function maybeHandleCallApi({
       model_registry: registryJson,
       modelRegistry: registryJson,
       model_info_registry: infoRegistryJson,
-      modelInfoRegistry: infoRegistryJson
+      modelInfoRegistry: infoRegistryJson,
+      enable_grpc_to_ide_messaging: false,
+      enableGrpcToIdeMessaging: false,
+      enable_commit_session_events: false,
+      enableCommitSessionEvents: false,
+      vscode_background_agents_min_version: "9999.0.0",
+      vscodeBackgroundAgentsMinVersion: "9999.0.0",
+      remote_agent_list_polling_interval_ms: 2147483647,
+      remoteAgentListPollingIntervalMs: 2147483647,
+      remote_agent_chat_history_polling_interval_ms: 2147483647,
+      remoteAgentChatHistoryPollingIntervalMs: 2147483647,
+      notification_polling_interval_ms: 2147483647,
+      notificationPollingIntervalMs: 2147483647,
+      enable_native_remote_mcp: false,
+      enableNativeRemoteMcp: false,
+      enable_credits_in_settings: false,
+      enableCreditsInSettings: false,
+      enable_credit_banner_in_settings: false,
+      enableCreditBannerInSettings: false
     };
     const base = upstream && typeof upstream === "object" ? upstream : { default_model: "", feature_flags: {}, languages: [], models: [], user: {}, user_tier: "unknown" };
     return transform({ ...base, default_model: agentChatModel, models, feature_flags });

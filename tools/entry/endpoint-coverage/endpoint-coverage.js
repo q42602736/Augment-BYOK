@@ -121,6 +121,18 @@ async function main() {
 
   const supportedButNotReferenced = Array.from(supported).filter((ep) => !upstream.endpointDetails[ep]).sort();
   const llmButNotReferenced = llmEndpoints.filter((ep) => !upstream.endpointDetails[ep]).sort();
+  const llmInProfile = llmEndpoints.filter((ep) => supported.has(ep)).sort();
+  const llmNotInProfile = llmEndpoints.filter((ep) => !supported.has(ep)).sort();
+  const llmEndpointDetails = llmEndpoints
+    .map((ep) => {
+      const d = upstream.endpointDetails[ep] || { callApi: { count: 0, samples: [] }, callApiStream: { count: 0, samples: [] } };
+      return { endpoint: ep, segment: topSegment(ep), callApiCount: d.callApi.count, callApiStreamCount: d.callApiStream.count };
+    })
+    .sort((a, b) => a.endpoint.localeCompare(b.endpoint));
+  const llmCallApi = llmEndpointDetails.filter((x) => x.callApiCount > 0 && x.callApiStreamCount === 0).map((x) => x.endpoint);
+  const llmCallApiStream = llmEndpointDetails.filter((x) => x.callApiCount === 0 && x.callApiStreamCount > 0).map((x) => x.endpoint);
+  const llmCallBoth = llmEndpointDetails.filter((x) => x.callApiCount > 0 && x.callApiStreamCount > 0).map((x) => x.endpoint);
+  const llmCallNeither = llmEndpointDetails.filter((x) => x.callApiCount === 0 && x.callApiStreamCount === 0).map((x) => x.endpoint);
 
   console.log(`[check] upstream: augment.vscode-augment@${upstream.version}`);
   console.log(`[check] upstream source: ${upstream.source.kind === "analysis" ? upstream.source.path : upstream.source.extensionJsPath}`);
@@ -132,6 +144,8 @@ async function main() {
   console.log(`[check] missing but in llm list: ${missingFromProfileLlm.length}`);
   console.log(`[check] missing and NOT in llm list: ${missingFromProfileNotLlm.length}`);
   console.log(`[check] profile supported but NOT referenced by upstream: ${supportedButNotReferenced.length}`);
+  console.log(`[check] llm endpoints also in profile: ${llmInProfile.length}`);
+  console.log(`[check] llm call kinds: callApi=${llmCallApi.length} callApiStream=${llmCallApiStream.length} both=${llmCallBoth.length} neither=${llmCallNeither.length}`);
 
   const reportPath = path.join(repoRoot, ".cache", "reports", "endpoint-coverage.report.json");
   const reportMdPath = path.join(repoRoot, ".cache", "reports", "endpoint-coverage.report.md");
@@ -152,6 +166,8 @@ async function main() {
       unpackDir: upstream.source.kind === "analysis" ? "" : path.relative(repoRoot, unpackDir)
     },
     llm: { path: path.relative(repoRoot, llmPath), endpointCount: llmEndpoints.length, endpoints: llmEndpoints },
+    llmDetails: { endpoints: llmEndpointDetails, callApi: llmCallApi, callApiStream: llmCallApiStream, callBoth: llmCallBoth, callNeither: llmCallNeither },
+    overlap: { llmInProfile, llmNotInProfile },
     localHandled: { endpointCount: localHandledList.length, endpoints: localHandledList },
     referencedEndpoints: upstreamEndpoints,
     missingFromProfile,
@@ -185,6 +201,22 @@ async function main() {
     `- missing but in llm list: ${missingFromProfileLlm.length}`,
     `- missing and NOT in llm list: ${missingFromProfileNotLlm.length}`,
     `- supported but not referenced: ${supportedButNotReferenced.length}`,
+    `- llm endpoints also in profile: ${llmInProfile.length}`,
+    `- llm call kinds: callApi=${llmCallApi.length} callApiStream=${llmCallApiStream.length} both=${llmCallBoth.length} neither=${llmCallNeither.length}`,
+    ``,
+    `## LLM Endpoints (Call Kind)`,
+    ``,
+    `### callApi (${llmCallApi.length})`,
+    ...llmCallApi.map((p) => `- ${p}`),
+    ``,
+    `### callApiStream (${llmCallApiStream.length})`,
+    ...llmCallApiStream.map((p) => `- ${p}`),
+    ``,
+    `### both (${llmCallBoth.length})`,
+    ...llmCallBoth.map((p) => `- ${p}`),
+    ``,
+    `### neither (${llmCallNeither.length})`,
+    ...llmCallNeither.map((p) => `- ${p}`),
     ``,
     `## Missing From Profile (Grouped)`,
     ...Object.entries(reportJson.missingFromProfileBySegment).flatMap(([seg, items]) => [``, `### ${seg} (${items.length})`, ...items.map((p) => `- ${p}`)]),

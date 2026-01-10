@@ -6,5 +6,6 @@ export const AUGMENT_BYOK = {
   extensionContextGlobalKey: "__augment_byok_extension_context",
   byokConfigGlobalStateKey: "__augment_byok_config_v2",
   byokModelsCacheGlobalStateKey: "__augment_byok_models_cache_v2",
+  byokUpstreamGetModelsCacheGlobalStateKey: "__augment_byok_upstream_get_models_cache_v1",
   byokSecretPrefix: "__augment_byok_secret_v2"
 } as const;
