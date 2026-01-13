@@ -1,5 +1,5 @@
 import { AUGMENT_BYOK } from "../../constants";
-import { normalizeEndpoint, normalizeString } from "../../atom/common/http";
+import { assertHttpBaseUrl, ensureTrailingSlash, normalizeEndpoint, normalizeRawToken, normalizeString } from "../../atom/common/http";
 import { asRecord } from "../../atom/common/object";
 import { assertVscodeContextStorage } from "../../atom/common/vscode-storage";
 import type { ByokConfigV2, ByokExportV2, ByokProvider, ByokProviderSecrets, ByokResolvedConfigV2, ByokRoutingRule } from "../../types";
@@ -253,4 +253,75 @@ export async function importByokConfig({
       return tasks;
     })
   );
+}
+
+export type UpstreamConfigOverride = { enabled: true; completionURL: string; apiToken: string };
+
+const UPSTREAM_CONFIG_OVERRIDE_KEY = "__augment_byok_upstream_config_override";
+const BYOK_PROXY_SOURCE_GLOBAL_STATE_KEY = "__augment_byok_proxy_source_v1";
+
+export async function getByokProxySourceRaw({ context }: { context: any }): Promise<string> {
+  assertContextStorage(context);
+  return normalizeString(await context.globalState.get(BYOK_PROXY_SOURCE_GLOBAL_STATE_KEY));
+}
+
+export async function isByokProxyAutoAuthManaged({ context }: { context: any }): Promise<boolean> {
+  return (await getByokProxySourceRaw({ context })) === "autoAuth";
+}
+
+export function clearUpstreamConfigOverride(): void {
+  try {
+    delete (globalThis as any)[UPSTREAM_CONFIG_OVERRIDE_KEY];
+  } catch {
+    try {
+      (globalThis as any)[UPSTREAM_CONFIG_OVERRIDE_KEY] = { enabled: false };
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export async function syncUpstreamConfigOverrideFromByokStorage({
+  context,
+  env = process.env
+}: {
+  context: any;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  try {
+    const raw = await loadByokConfigRaw({ context });
+    if (raw.enabled !== true) {
+      clearUpstreamConfigOverride();
+      return;
+    }
+    const cfg = await loadByokConfigResolved({ context, env });
+    const completionURL = ensureTrailingSlash(assertHttpBaseUrl(cfg.proxy.baseUrl));
+    const apiToken = normalizeRawToken(cfg.proxy.token);
+    if (!apiToken) throw new Error("Token 未配置");
+    (globalThis as any)[UPSTREAM_CONFIG_OVERRIDE_KEY] = { enabled: true, completionURL, apiToken };
+  } catch (err) {
+    clearUpstreamConfigOverride();
+    throw err;
+  }
+}
+
+export async function applyAutoAuthToByokProxy({
+  context,
+  token,
+  baseUrl,
+  env = process.env
+}: {
+  context: any;
+  token: string;
+  baseUrl: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  assertContextStorage(context);
+  const b = ensureTrailingSlash(assertHttpBaseUrl(baseUrl));
+  const t = normalizeRawToken(token);
+  const current = await loadByokConfigRaw({ context });
+  const next: ByokConfigV2 = { ...current, proxy: { ...current.proxy, baseUrl: b } };
+  await saveByokConfig({ context, config: next, proxyToken: t });
+  await context.globalState.update(BYOK_PROXY_SOURCE_GLOBAL_STATE_KEY, "autoAuth");
+  await syncUpstreamConfigOverrideFromByokStorage({ context, env });
 }

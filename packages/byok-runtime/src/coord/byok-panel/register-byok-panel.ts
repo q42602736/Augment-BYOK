@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { exportByokConfig, getByokProxyTokenRaw, getByokSecretStatus, importByokConfig, loadByokConfigRaw, loadByokConfigResolved, resolveSecretOrThrow, saveByokConfig } from "../../mol/byok-storage/byok-config";
+import { exportByokConfig, getByokProxyTokenRaw, getByokSecretStatus, importByokConfig, isByokProxyAutoAuthManaged, loadByokConfigRaw, loadByokConfigResolved, resolveSecretOrThrow, saveByokConfig, syncUpstreamConfigOverrideFromByokStorage } from "../../mol/byok-storage/byok-config";
 import { loadProviderModelsCacheRaw, saveCachedProviderModels } from "../../mol/byok-storage/byok-cache";
 import { AUGMENT_BYOK } from "../../constants";
 import { anthropicListModels } from "../../atom/byok-providers/anthropic-native";
@@ -204,10 +204,17 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
             }
 
             if (method === "save") {
-              const cfg = params && typeof params === "object" ? (params as any).config : null;
-              const proxyToken = params && typeof params === "object" ? normalizeString((params as any).proxyToken) : "";
-              const clearProxyToken = Boolean(params && typeof params === "object" ? (params as any).clearProxyToken : false);
+              let cfg = params && typeof params === "object" ? (params as any).config : null;
+              let proxyToken = params && typeof params === "object" ? normalizeString((params as any).proxyToken) : "";
+              let clearProxyToken = Boolean(params && typeof params === "object" ? (params as any).clearProxyToken : false);
               const providerSecretsById = params && typeof params === "object" ? (params as any).providerSecretsById : null;
+              if (await isByokProxyAutoAuthManaged({ context })) {
+                const storedCfg = await loadByokConfigRaw({ context });
+                const storedBaseUrl = normalizeString(storedCfg?.proxy?.baseUrl);
+                if (cfg && typeof cfg === "object") (cfg as any).proxy = { ...((cfg as any).proxy || {}), baseUrl: storedBaseUrl };
+                proxyToken = "";
+                clearProxyToken = false;
+              }
               const enabled = Boolean(cfg && typeof cfg === "object" ? (cfg as any).enabled : false);
               if (enabled) {
                 const providers = Array.isArray(cfg && typeof cfg === "object" ? (cfg as any).providers : null) ? (cfg as any).providers : [];
@@ -240,6 +247,7 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
                 clearProxyToken,
                 secretsByProviderId: providerSecretsById && typeof providerSecretsById === "object" ? providerSecretsById : undefined
               });
+              await syncUpstreamConfigOverrideFromByokStorage({ context });
               await post(requestId, { ok: true, result: { ok: true } });
               return;
             }
@@ -256,7 +264,20 @@ export function registerByokPanel({ vscode, context, logger = console }: { vscod
               const overwriteSecrets = Boolean(params && typeof params === "object" ? (params as any).overwriteSecrets : false);
               if (!jsonText) throw new Error("缺少 jsonText");
               const data = JSON.parse(jsonText);
+              if (await isByokProxyAutoAuthManaged({ context })) {
+                const storedCfg = await loadByokConfigRaw({ context });
+                const storedTokenRaw = await getByokProxyTokenRaw({ context });
+                const d = data && typeof data === "object" ? (data as any) : null;
+                if (d) {
+                  const cfgRoot = d.config && typeof d.config === "object" ? d.config : {};
+                  d.config = { ...cfgRoot, proxy: { ...(cfgRoot.proxy || {}), baseUrl: normalizeString(storedCfg?.proxy?.baseUrl) } };
+                  const secretsRoot = d.secrets && typeof d.secrets === "object" ? d.secrets : {};
+                  const proxySecrets = secretsRoot.proxy && typeof secretsRoot.proxy === "object" ? secretsRoot.proxy : {};
+                  d.secrets = { ...secretsRoot, proxy: { ...proxySecrets, token: storedTokenRaw || null } };
+                }
+              }
               await importByokConfig({ context, data, overwriteSecrets });
+              await syncUpstreamConfigOverrideFromByokStorage({ context });
               await post(requestId, { ok: true, result: { ok: true } });
               return;
             }

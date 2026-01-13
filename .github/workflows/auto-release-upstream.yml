@@ -50,10 +50,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Compliance notice (no bypass / no anti-detection)
+      - name: Compliance notice (BYOK patch-set build)
         run: |
-          echo "本工作流仅做 BYOK 合规替代构建与审计：自动检测上游版本、构建 BYOK VSIX、发布 GitHub Release。"
-          echo "明确禁止并不会实现：任何风控绕过/反检测/指纹改写/会话伪造/伪造签名。"
+          echo "本工作流用于：自动检测上游版本、构建 BYOK VSIX、发布 GitHub Release。"
+          echo "注意：构建产物包含 openspec/specs/vsix-patch-set 定义的补丁集（含 autoAuth URI 与部分端点的最小拦截/阻断，用于 BYOK 代理兼容与噪声控制）。"
 
       - name: Analyze upstream (version preflight)
         run: pnpm upstream:analyze

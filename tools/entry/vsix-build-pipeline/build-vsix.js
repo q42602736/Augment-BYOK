@@ -19,6 +19,9 @@ const { patchSuggestedQuestionsContentGuard } = require("../../mol/vsix-patch-se
 const { patchMainPanelErrorOverlay } = require("../../mol/vsix-patch-set/patch-main-panel-error-overlay");
 const { patchSubscriptionBannerNonfatal } = require("../../mol/vsix-patch-set/patch-subscription-banner-nonfatal");
 const { patchWebviewMessageTimeoutGuard } = require("../../mol/vsix-patch-set/patch-webview-message-timeout-guard");
+const { patchChatStreamForwardInject } = require("../../mol/vsix-patch-set/patch-chat-stream-forward-inject");
+const { patchAutoAuthUri } = require("../../mol/vsix-patch-set/patch-autoauth-uri");
+const { patchAugmentInterceptorInject } = require("../../mol/vsix-patch-set/patch-augment-interceptor-inject");
 
 const { UPSTREAM, ensureDir, run, syncUpstreamLatest } = require("../../atom/vsix-upstream-sync");
 const { copyDir, readJson, rmDir } = require("../../atom/common/fs");
@@ -89,6 +92,15 @@ async function main() {
 
   console.log(`[build] patch webview message timeout guard (rules/analytics/subscription)`);
   patchWebviewMessageTimeoutGuard(path.join(extensionDir, "out", "extension.js"));
+
+  console.log(`[build] inject chat-stream forward (optional via settings)`);
+  patchChatStreamForwardInject(path.join(extensionDir, "out", "extension.js"));
+
+  console.log(`[build] patch autoAuth URI handler`);
+  patchAutoAuthUri(path.join(extensionDir, "out", "extension.js"));
+
+  console.log(`[build] inject augment interceptor (inject-code.txt)`);
+  patchAugmentInterceptorInject(path.join(extensionDir, "out", "extension.js"));
 
   console.log(`[build] patch package.json BYOK panel command`);
   patchPackageJsonByokPanelCommand(pkgPath);
